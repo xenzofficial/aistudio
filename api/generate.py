@@ -1,11 +1,9 @@
 from http.server import BaseHTTPRequestHandler
-from gemini import Gemini
 import json
 import os
-os.environ["GEMINI_ULTRA"] = "1"
+from gemini import Gemini
 
-# Cookies hardcoded (TIDAK DISARANKAN untuk produksi)
-COOKIES = {
+cookies = {
   "SID": "g.a000yQgMd6M6PdLhOsM-cpJnCYDGbsFrYmvO-ePk0qQr6Vj28d9GU4yjczENUwoXW1N4aolYyQACgYKAUcSARISFQHGX2MiNtRif3PgjuzvJbeYKjHkwBoVAUF8yKpZVJzn4AyTXwwe_Ak5oae-0076",
   "__Secure-1PSID": "g.a000yQgMd6M6PdLhOsM-cpJnCYDGbsFrYmvO-ePk0qQr6Vj28d9GEj0uPkcJMhLG6se5lKhbUAACgYKAUwSARISFQHGX2Mion3ntADn0odeCh-S21m2jBoVAUF8yKqaRWxPFdlsH6CeLEBinqKF0076",
   "__Secure-3PSID": "g.a000yQgMd6M6PdLhOsM-cpJnCYDGbsFrYmvO-ePk0qQr6Vj28d9Gotn1vcrda_UGxtBGTFnrhgACgYKAdASARISFQHGX2Mip0dFO4qyq2Z-WCGs6pdfYRoVAUF8yKoeGPS2_DJEMLDXbQr5a5tT0076",
@@ -20,40 +18,67 @@ COOKIES = {
   "__Secure-1PSIDCC": "AKEyXzVFcfxZiZTy8mXrdv_DHfHnJrPXoekQxlVumXoT0nMg83NAED8ImiFsVwceTZooDjQm",
   "__Secure-3PSIDCC": "AKEyXzVhNe1vuzHoJVhGaTtTRrwjrhacALcoZW6I7CJcK6KEA7_BzSERPR05ZdztikUGj6PAwRg"
 }
-client = Gemini(cookies=COOKIES)
-
 class handler(BaseHTTPRequestHandler):
     def do_GET(self):
+        self.send_response(200)
+        self.send_header('Content-type', 'application/json')
+        self.end_headers()
+        
         try:
-            # Parse query parameters
+            # Get prompt from URL params
             query = self.path.split('?')[1] if '?' in self.path else ''
-            params = dict(qc.split('=') for qc in query.split('&')) if query else {}
+            params = dict(q.split('=') for q in query.split('&')) if query else {}
             prompt = params.get('prompt', '')
             
             if not prompt:
-                self.send_response(400)
-                self.send_header('Content-type', 'application/json')
-                self.end_headers()
-                self.wfile.write(json.dumps({
-                    "error": "Parameter 'prompt' diperlukan"
-                }).encode())
-                return
+                raise ValueError("Missing 'prompt' parameter")
             
-            # Get response from Gemini
-            response = client.generate_content(prompt)
+            # Initialize Gemini client
+            os.environ["GEMINI_ULTRA"] = "1"
+            client = Gemini(
+                cookies=cookies
+            )
             
-            self.send_response(200)
-            self.send_header('Content-type', 'application/json')
-            self.end_headers()
-            self.wfile.write(json.dumps({
+            # Get Gemini response
+            gemini_response = client.generate_content(prompt)
+            payload = gemini_response.payload
+            
+            # Extract text and code from response
+            response_text = ""
+            response_code = {}
+            
+            if 'candidates' in payload and len(payload['candidates']) > 0:
+                candidate = payload['candidates'][0]
+                response_text = candidate.get('text', '')
+                
+                # Extract code snippets
+                if 'code' in candidate:
+                    response_code = candidate['code']
+                else:
+                    # Fallback: extract code from text if not in structured format
+                    import re
+                    code_blocks = re.findall(r'```(?:html|python|javascript)?\n(.*?)\n```', response_text, re.DOTALL)
+                    if code_blocks:
+                        response_code = {"snippet_1": code_blocks[0]}
+            
+            # Build final response
+            response_data = {
                 "status": "success",
-                "response": response.payload
-            }).encode())
+                "response": {
+                    "text": response_text,
+                    "code": response_code
+                }
+            }
+            
+            self.wfile.write(json.dumps(response_data).encode())
             
         except Exception as e:
-            self.send_response(500)
-            self.send_header('Content-type', 'application/json')
-            self.end_headers()
-            self.wfile.write(json.dumps({
-                "error": str(e)
-            }).encode())
+            error_response = {
+                "status": "error",
+                "message": str(e),
+                "response": {
+                    "text": "",
+                    "code": {}
+                }
+            }
+            self.wfile.write(json.dumps(error_response).encode())
