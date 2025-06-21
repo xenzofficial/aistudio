@@ -52,7 +52,7 @@ class handler(BaseHTTPRequestHandler):
 
     def call_groq_api(self, prompt):
         url = "https://api.groq.com/openai/v1/chat/completions"
-        api_key = os.getenv("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")
+        api_key = "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"
         
         headers = {
             "Authorization": f"Bearer {api_key}",
