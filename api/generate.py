@@ -60,7 +60,7 @@ class handler(BaseHTTPRequestHandler):
         }
         
         payload = {
-            "model": "llama3-70b-8192",
+            "model": "distil-whisper-large-v3-en",
             "messages": [{
                 "role": "user",
                 "content": prompt
