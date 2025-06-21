@@ -1,87 +1,74 @@
 from http.server import BaseHTTPRequestHandler
+from urllib.parse import urlparse, parse_qs
+import requests
 import json
 import os
-from gemini import Gemini
 
-cookies = {
-  "SID": "g.a000yQgMd6M6PdLhOsM-cpJnCYDGbsFrYmvO-ePk0qQr6Vj28d9GU4yjczENUwoXW1N4aolYyQACgYKAUcSARISFQHGX2MiNtRif3PgjuzvJbeYKjHkwBoVAUF8yKpZVJzn4AyTXwwe_Ak5oae-0076",
-  "__Secure-1PSID": "g.a000yQgMd6M6PdLhOsM-cpJnCYDGbsFrYmvO-ePk0qQr6Vj28d9GEj0uPkcJMhLG6se5lKhbUAACgYKAUwSARISFQHGX2Mion3ntADn0odeCh-S21m2jBoVAUF8yKqaRWxPFdlsH6CeLEBinqKF0076",
-  "__Secure-3PSID": "g.a000yQgMd6M6PdLhOsM-cpJnCYDGbsFrYmvO-ePk0qQr6Vj28d9Gotn1vcrda_UGxtBGTFnrhgACgYKAdASARISFQHGX2Mip0dFO4qyq2Z-WCGs6pdfYRoVAUF8yKoeGPS2_DJEMLDXbQr5a5tT0076",
-  "HSID": "A3ec3EtUa-izSoN8V",
-  "SSID": "AamEuCXQVv17OWZCG",
-  "APISID": "uZpuELdCX6EmgsvN/AO9Ir15-mso3lJjP0",
-  "SAPISID": "1ln7OKXnrZoiiRzN/AD2HLrAD2t4P-LFFb",
-  "__Secure-1PAPISID": "1ln7OKXnrZoiiRzN/AD2HLrAD2t4P-LFFb",
-  "__Secure-3PAPISID": "1ln7OKXnrZoiiRzN/AD2HLrAD2t4P-LFFb",
-  "NID": "524=fCsG53Ke9twXz33r3aRrBXc6GhQR5IhihXIqg2a6vfXcasfvDHwrYjitLRCGwaH0dU0vyEv6eMOuXMfKoKlqjIeMWFw2A1le5zcQf7dnTpR6SNpwoUoj5uIyJho_WIpMQs-BPVoCfd2jV_ulbpzqGmVG5_SSwD1eiy2HAXiGpH0D3Bl--cVUyAIdZlNHBs_PcvfA6oaZCCot1v6BifeAMLVywo4I1YdftQ-YGWsm",
-  "SIDCC": "AKEyXzW6k2g0VL_c0PtqJYPrIkLj_s8OQ4CsDzPjz49JGGCI2CCVlPrQUvQgbFUe9mhKLDZu",
-  "__Secure-1PSIDCC": "AKEyXzVFcfxZiZTy8mXrdv_DHfHnJrPXoekQxlVumXoT0nMg83NAED8ImiFsVwceTZooDjQm",
-  "__Secure-3PSIDCC": "AKEyXzVhNe1vuzHoJVhGaTtTRrwjrhacALcoZW6I7CJcK6KEA7_BzSERPR05ZdztikUGj6PAwRg"
-}
 class handler(BaseHTTPRequestHandler):
-    def do_GET(self):
-        self.send_response(200)
+    def do_OPTIONS(self):
+        self.send_response(204)
         self.send_header('Access-Control-Allow-Origin', '*')
         self.send_header('Access-Control-Allow-Methods', 'GET, OPTIONS')
         self.send_header('Access-Control-Allow-Headers', 'Content-Type')
-        self.send_header('Content-type', 'application/json')
         self.end_headers()
-        
+    
+    def do_GET(self):
         try:
-            # Get prompt from URL params
-            query = self.path.split('?')[1] if '?' in self.path else ''
-            params = dict(q.split('=') for q in query.split('&')) if query else {}
-            prompt = params.get('prompt', '')
+            # Parse query parameters
+            query = urlparse(self.path).query
+            params = parse_qs(query)
+            prompt = params.get('prompt', [''])[0].strip()
             
             if not prompt:
-                raise ValueError("Missing 'prompt' parameter")
+                self.send_response(400)
+                self.send_header('Content-type', 'application/json')
+                self.send_header('Access-Control-Allow-Origin', '*')
+                self.end_headers()
+                self.wfile.write(json.dumps({
+                    "error": "Please provide a 'prompt' parameter"
+                }).encode())
+                return
             
-            # Initialize Gemini client
-            os.environ["GEMINI_ULTRA"] = "1"
-            client = Gemini(
-                cookies=cookies
-            )
+            # Call Groq API
+            groq_response = self.call_groq_api(prompt)
             
-            # Get Gemini response
-            gemini_response = client.generate_content(prompt)
-            payload = gemini_response.payload
-            
-            # Extract text and code from response
-            response_text = ""
-            response_code = {}
-            
-            if 'candidates' in payload and len(payload['candidates']) > 0:
-                candidate = payload['candidates'][0]
-                response_text = candidate.get('text', '')
-                
-                # Extract code snippets
-                if 'code' in candidate:
-                    response_code = candidate['code']
-                else:
-                    # Fallback: extract code from text if not in structured format
-                    import re
-                    code_blocks = re.findall(r'```(?:html|python|javascript)?\n(.*?)\n```', response_text, re.DOTALL)
-                    if code_blocks:
-                        response_code = {"snippet_1": code_blocks[0]}
-            
-            # Build final response
-            response_data = {
-                "status": "success",
-                "response": {
-                    "text": response_text,
-                    "code": response_code
-                }
-            }
-            
-            self.wfile.write(json.dumps(response_data).encode())
+            # Send successful response
+            self.send_response(200)
+            self.send_header('Content-type', 'application/json')
+            self.send_header('Access-Control-Allow-Origin', '*')
+            self.end_headers()
+            self.wfile.write(json.dumps({
+                "response": groq_response
+            }).encode())
             
         except Exception as e:
-            error_response = {
-                "status": "error",
-                "message": str(e),
-                "response": {
-                    "text": "",
-                    "code": {}
-                }
-            }
-            self.wfile.write(json.dumps(error_response).encode())
+            self.send_response(500)
+            self.send_header('Content-type', 'application/json')
+            self.send_header('Access-Control-Allow-Origin', '*')
+            self.end_headers()
+            self.wfile.write(json.dumps({
+                "error": str(e)
+            }).encode())
+
+    def call_groq_api(self, prompt):
+        url = "https://api.groq.com/openai/v1/chat/completions"
+        api_key = os.getenv("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")
+        
+        headers = {
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json"
+        }
+        
+        payload = {
+            "model": "llama3-70b-8192",
+            "messages": [{
+                "role": "user",
+                "content": prompt
+            }],
+            "temperature": 0.7
+        }
+        
+        response = requests.post(url, headers=headers, json=payload)
+        response.raise_for_status()
+        
+        return response.json()['choices'][0]['message']['content']
